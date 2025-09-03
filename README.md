@@ -1,10 +1,12 @@
 # unplugin-vue-i18n-dts-generation
 
-A Vite plugin that works alongside [`@intlify/unplugin-vue-i18n`](https://github.com/intlify/bundle-tools/tree/main/packages/unplugin-vue-i18n) to generate TypeScript definitions from its virtual i18n modules. This plugin helps you maintain type safety by automatically generating TypeScript definitions for your i18n keys and messages.
+**Generate TypeScript declaration files for Vue I18n with a lightweight Vite plugin.**
+
+unplugin-vue-i18n-dts-generation works alongside [`@intlify/unplugin-vue-i18n`](https://github.com/intlify/bundle-tools/tree/main/packages/unplugin-vue-i18n) to automatically create `.d.ts` files from virtual i18n modules. The plugin enables type-safe internationalization and localization for Vue 3 applications by keeping translation keys and messages in sync.
 
 ## Features
 
-- 🚀 Seamless integration with `@intlify/unplugin-vue-i18n`
+- 🚀 Seamless integration with Vue 3, Vite, and `@intlify/unplugin-vue-i18n`
 - 🔄 Automatic TypeScript definition generation from virtual i18n modules
 - 🎯 Type-safe i18n keys and message structure
 - 🔧 Hot-reload support with file watching in development
