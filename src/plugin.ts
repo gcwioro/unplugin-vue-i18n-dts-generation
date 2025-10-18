@@ -1,6 +1,6 @@
 import path from "node:path";
 import {promises as fs} from "node:fs";
-import {EnvironmentModuleNode, HotUpdateOptions, Logger, normalizePath, PluginOption,} from "vite";
+import {DevEnvironment, EnvironmentModuleNode, HotUpdateOptions, Logger, normalizePath, PluginOption,} from "vite";
 import type {VirtualKeysDtsOptions} from "./types";
 import {createVirtualModuleCode} from "./generator";
 import {normalizeConfig} from "./core/config";
@@ -30,6 +30,16 @@ export function vitePluginVueI18nTypes(
   let fileManager: FileManager;
   let generationCoordinator: GenerationCoordinator;
   let rebuildManager: RebuildManager;
+  let pendingHotUpdate:
+    | {
+        key: string;
+        promise: Promise<{
+          grouped: Record<string, any>;
+          jsonText: string;
+          modules: EnvironmentModuleNode[];
+        }>;
+      }
+    | null = null;
 
   /**
    * Check if types file exists and is accessible
@@ -235,11 +245,16 @@ export function vitePluginVueI18nTypes(
     async hotUpdate({server, timestamp, type, modules, ...ctx}: HotUpdateOptions): Promise<
       Array<EnvironmentModuleNode> | void
     > {
-      logger.info(`🔥 [hotUpdate] Hook triggered for file: ${ctx.file}, type: ${type}, timestamp: ${timestamp}`);
-      logger.info(`🔥 [hotUpdate] Environment: ${this.environment?.name}, modules count: ${modules.length}`);
+      const file = (ctx as {file?: string}).file ?? modules[0]?.id ?? "";
+      const environment = this.environment ?? (ctx as {environment?: DevEnvironment}).environment;
+      const environmentName = environment?.name ?? "unknown";
 
-      if (!isWatchedFile(ctx.file)) {
-        logger.info(`🔥 [hotUpdate] File not watched, skipping: ${ctx.file}`);
+      logger.info(
+        `🔥 [hotUpdate] Hook triggered for file: ${file}, type: ${type}, timestamp: ${timestamp}, environment: ${environmentName}`
+      );
+
+      if (!file || !isWatchedFile(file)) {
+        logger.info(`🔥 [hotUpdate] File not watched or missing, skipping: ${file}`);
         return;
       }
 
@@ -250,33 +265,57 @@ export function vitePluginVueI18nTypes(
         });
       }
 
-      // Only process in client environment to avoid duplicate rebuilds
-      if (this.environment?.name !== 'client') {
-        logger.info(`🔥 [hotUpdate] Skipping for non-client environment: ${this.environment?.name}`);
-        return;
+      if (environment) {
+        await rebuildManager.setEnv(environment);
       }
 
-      logger.info(`🔥 [hotUpdate] Triggering rebuild for file change...`);
-      await rebuildManager.setEnv(this.environment);
+      const changeKey = `${file}:${timestamp ?? "no-timestamp"}`;
+      if (!pendingHotUpdate || pendingHotUpdate.key !== changeKey) {
+        logger.info(`🔥 [hotUpdate] Triggering rebuild for key: ${changeKey}`);
+        const rebuildPromise = rebuildManager.rebuild("change", modules).catch((error) => {
+          if (pendingHotUpdate?.key === changeKey) {
+            pendingHotUpdate = null;
+          }
+          throw error;
+        });
+        pendingHotUpdate = {
+          key: changeKey,
+          promise: rebuildPromise,
+        };
+      } else {
+        logger.info(`🔥 [hotUpdate] Reusing pending rebuild result for key: ${changeKey}`);
+      }
 
-      // Perform rebuild immediately (no debouncing needed in Vite 7)
-      const result = await rebuildManager.rebuild("change", modules);
+      const result = await pendingHotUpdate.promise;
 
-      // Send custom HMR event to update i18n messages directly
-      logger.info(`🔥 [hotUpdate] Sending custom i18n-update event with new messages`);
+      if (environmentName === "client") {
+        logger.info(`🔥 [hotUpdate] Sending custom i18n-update event for client environment`);
+        const payload = {
+          type: "custom" as const,
+          event: "i18n-update",
+          data: {
+            messages: result.grouped,
+            timestamp,
+          },
+        };
 
-      // Send the updated messages to the client
-      server.ws.send({
-        type: 'custom',
-        event: 'i18n-update',
-        data: {
-          messages: result.grouped,
-          timestamp
+        const hotChannel = environment?.hot;
+        const hotSend = typeof hotChannel?.send === "function" ? hotChannel.send.bind(hotChannel) : undefined;
+
+        if (hotSend) {
+          hotSend(payload);
+        } else if (server?.ws?.send) {
+          logger.info(`🔥 [hotUpdate] Environment hot channel missing, falling back to server.ws.send`);
+          server.ws.send(payload);
+        } else {
+          logger.warn(`🔥 [hotUpdate] Unable to send hot update event - no hot channel available`);
         }
-      });
 
-      // Return empty array to prevent default HMR behavior
-      return [];
+        return [];
+      }
+
+      logger.info(`🔥 [hotUpdate] Returning modules for environment: ${environmentName}`);
+      return result.modules?.length ? result.modules : modules;
     },
   };
 }
