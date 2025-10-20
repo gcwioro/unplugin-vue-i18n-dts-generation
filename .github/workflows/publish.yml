@@ -3,70 +3,94 @@ name: Publish to npm
 on:
   push:
     branches:
-      - 'release/**'     # publish alpha on pushes to git-flow release branches
+      - 'release/**'   # publish alpha on pushes to git-flow release branches
     tags:
-      - 'v*.*.*'         # publish stable on semver tags (e.g., v1.2.3)
-  workflow_dispatch:      # manual trigger
-
-
+      - 'v*.*.*'       # publish stable on semver tags (e.g., v1.2.3)
+  workflow_dispatch:
 
 jobs:
   release:
     name: Publish stable (tagged release)
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
+      # Node sets up npm auth from NODE_AUTH_TOKEN when registry-url is provided
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
           registry-url: 'https://registry.npmjs.org'
+          # If your package is scoped, uncomment the next line and set your scope:
+          # scope: '@your-scope'
 
-      - run: npm install
-      #     - run: npm test
+      # (Optional hardening) Ensure ~/.npmrc exists even if repo .npmrc overrides things
+      - name: Configure npm auth (defensive)
+        run: |
+          printf "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n" > ~/.npmrc
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: npm ci
       - name: Lint
         run: npm run lint
-
       - name: Type Check
         run: npm run typecheck
-
       - name: Test
         run: npm test -- --run
-
       - name: Build
         run: npm run build
 
       - name: Publish (stable)
-        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # For scoped public packages, ensure access flag
+          npm publish --access public
+          # If you want SLSA provenance (npm v10+), use:
+          # npm publish --access public --provenance
 
   alpha-release:
     name: Publish alpha (git-flow release/*)
     if: startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
+      # Always configure Node + npm auth for publish, even if you also install Bun
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+          # scope: '@your-scope'  # uncomment if needed
+
+      # (Optional) If you truly need Bun for any scripts, keep it.
+      # Otherwise you can remove this step.
+      - name: Setup Bun (optional)
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-          registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install
-      #     - run: npm test
+      # (Optional hardening) Ensure ~/.npmrc exists
+      - name: Configure npm auth (defensive)
+        run: |
+          printf "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}\n" > ~/.npmrc
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: npm ci
       - name: Lint
         run: npm run lint
-
       - name: Type Check
         run: npm run typecheck
-
       - name: Test
         run: npm test -- --run
-
       - name: Build
         run: npm run build
 
@@ -81,6 +105,6 @@ jobs:
           npm --no-git-tag-version version "${PRERELEASE_VERSION}"
 
       - name: Publish (alpha dist-tag)
-        run: npm publish --access public --tag alpha
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag alpha
